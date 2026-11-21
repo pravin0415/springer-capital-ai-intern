@@ -1,0 +1,22 @@
+Issue,Rows affected,Action,Reason
+Missing or invalid Dt_Customer,0,Drop rows with invalid enrollment date,Required for the reference year and tenure.
+"Missing, nonpositive, or implausible Income (>200,000)",25,Replace with valid-income median (51373),A robust median preserves customers while removing an extreme value.
+Missing or impossible age (<18 or >100 at reference year),3,Replace Year_Birth with valid-birth median (1970),Age bands require a plausible adult age.
+Missing or inconsistent Education labels,203,Normalize 2n Cycle and map missing/unrecognized labels to Other,Keeps category values consistent without discarding rows.
+Missing or inconsistent Marital_Status labels,84,"Map Alone to Single; Widow to Widowed; YOLO, Absurd, and unknown/missing labels to Other",Standardizes equivalent and invalid category labels.
+Missing or impossible Kidhome,0,Replace with valid-value median (0),Household child counts must be nonnegative whole numbers.
+Missing or impossible Teenhome,0,Replace with valid-value median (0),Household child counts must be nonnegative whole numbers.
+Missing or invalid campaign flag AcceptedCmp1,0,Set missing or invalid flag to 0,Campaign outcomes are binary; absent acceptance is treated as no conversion.
+Missing or invalid campaign flag AcceptedCmp2,0,Set missing or invalid flag to 0,Campaign outcomes are binary; absent acceptance is treated as no conversion.
+Missing or invalid campaign flag AcceptedCmp3,0,Set missing or invalid flag to 0,Campaign outcomes are binary; absent acceptance is treated as no conversion.
+Missing or invalid campaign flag AcceptedCmp4,0,Set missing or invalid flag to 0,Campaign outcomes are binary; absent acceptance is treated as no conversion.
+Missing or invalid campaign flag AcceptedCmp5,0,Set missing or invalid flag to 0,Campaign outcomes are binary; absent acceptance is treated as no conversion.
+Missing or invalid campaign flag Response,0,Set missing or invalid flag to 0,Campaign outcomes are binary; absent acceptance is treated as no conversion.
+Missing or negative MntWines,0,Replace with median nonnegative spend (or zero if none),Spend cannot be negative.
+Missing or negative MntFruits,0,Replace with median nonnegative spend (or zero if none),Spend cannot be negative.
+Missing or negative MntMeatProducts,0,Replace with median nonnegative spend (or zero if none),Spend cannot be negative.
+Missing or negative MntFishProducts,0,Replace with median nonnegative spend (or zero if none),Spend cannot be negative.
+Missing or negative MntSweetProducts,0,Replace with median nonnegative spend (or zero if none),Spend cannot be negative.
+Missing or negative MntGoldProds,0,Replace with median nonnegative spend (or zero if none),Spend cannot be negative.
+Missing or inconsistent Z_CostContact,0,Set to the case value (3),The assignment defines these fixed campaign economics.
+Missing or inconsistent Z_Revenue,0,Set to the case value (11),The assignment defines these fixed campaign economics.

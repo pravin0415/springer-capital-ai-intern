@@ -45,15 +45,17 @@ def clean_data(raw):
 
     edu = df["Education"].fillna("Unknown").astype(str).str.strip()
     edu_map = {"2n Cycle": "2nd Cycle", "2nd cycle": "2nd Cycle", "Graduation": "Graduation", "Master": "Master", "PhD": "PhD", "Basic": "Basic"}
-    bad_edu = ~edu.isin(edu_map)
-    record("Missing or inconsistent Education labels", bad_edu.sum(), "Normalize 2n Cycle and map missing/unrecognized labels to Other", "Keeps category values consistent without discarding rows.")
-    df["Education"] = edu.map(edu_map).fillna("Other")
+    clean_edu = edu.map(edu_map).fillna("Other")
+    changed_edu = edu.ne(clean_edu)
+    record("Missing or inconsistent Education labels", changed_edu.sum(), "Normalize 2n Cycle and map missing/unrecognized labels to Other", "Keeps category values consistent without discarding rows.")
+    df["Education"] = clean_edu
 
     marital = df["Marital_Status"].fillna("Unknown").astype(str).str.strip()
     marital_map = {"Single": "Single", "Married": "Married", "Together": "Together", "Divorced": "Divorced", "Widow": "Widowed", "Widowed": "Widowed", "YOLO": "Other", "Absurd": "Other", "Alone": "Single"}
-    bad_mar = ~marital.isin(marital_map)
-    record("Missing or inconsistent Marital_Status labels", bad_mar.sum(), "Map Alone to Single; YOLO, Absurd, and unknown labels to Other", "Standardizes equivalent and invalid category labels.")
-    df["Marital_Status"] = marital.map(marital_map).fillna("Other")
+    clean_marital = marital.map(marital_map).fillna("Other")
+    changed_marital = marital.ne(clean_marital)
+    record("Missing or inconsistent Marital_Status labels", changed_marital.sum(), "Map Alone to Single; Widow to Widowed; YOLO, Absurd, and unknown/missing labels to Other", "Standardizes equivalent and invalid category labels.")
+    df["Marital_Status"] = clean_marital
 
     for col in ["Kidhome", "Teenhome"]:
         x = pd.to_numeric(df[col], errors="coerce")
@@ -75,16 +77,20 @@ def clean_data(raw):
         df[col] = x.mask(bad, x.loc[~bad].median() if (~bad).any() else 0)
 
     # Contact cost and conversion revenue are fixed by the supplied case definitions.
+    for col, expected in [("Z_CostContact", 3), ("Z_Revenue", 11)]:
+        current = pd.to_numeric(df[col], errors="coerce")
+        changed = current.isna() | current.ne(expected)
+        record(f"Missing or inconsistent {col}", changed.sum(), f"Set to the case value ({expected})", "The assignment defines these fixed campaign economics.")
     df["Z_CostContact"] = 3
     df["Z_Revenue"] = 11
     df["TotalSpend"] = df[SPEND].sum(axis=1)
     df["ReferenceYear"] = reference_year
     df["Age"] = reference_year - df["Year_Birth"]
-    df["AgeBand"] = pd.cut(df["Age"], [17, 34, 49, 64, 101], labels=["18–34", "35–49", "50–64", "65+"]).astype(str)
+    df["AgeBand"] = pd.cut(df["Age"], [17, 34, 49, 64, 101], labels=["18-34", "35-49", "50-64", "65+"]).astype(str)
     df["IncomeQuartile"] = pd.qcut(df["Income"].rank(method="first"), 4, labels=["Q1 lowest", "Q2", "Q3", "Q4 highest"])
     df["Children"] = np.where(df["Kidhome"] + df["Teenhome"] == 0, "0", "1+")
     days = (df["Dt_Customer"].max() - df["Dt_Customer"]).dt.days
-    df["TenureBand"] = pd.cut(days, [-1, 365, 730, 20000], labels=["Under 1 year", "1–2 years", "Over 2 years"]).astype(str)
+    df["TenureBand"] = pd.cut(days, [-1, 365, 730, 20000], labels=["Under 1 year", "1-2 years", "Over 2 years"]).astype(str)
     return df, pd.DataFrame(log)
 
 
@@ -168,11 +174,11 @@ def make_charts(df, campaign, tables, target_count, profit_all, profit_target):
     ax.legend(); fig.tight_layout(); fig.savefig(OUT/"segment_rates.png", dpi=180); plt.close(fig)
     fig, ax = plt.subplots(figsize=(8, 4.5)); x=np.arange(6); width=.36
     ax.bar(x-width/2, campaign["Avg spend converted"], width, label="Converted"); ax.bar(x+width/2, campaign["Avg spend not converted"], width, label="Did not convert")
-    ax.set(xticks=x, xticklabels=[f"Campaign {i}" for i in range(1,7)], ylabel="Average total spend", title="Responders spend more in some campaigns, but not all"); ax.legend()
+    ax.set(xticks=x, xticklabels=[f"Campaign {i}" for i in range(1,7)], ylabel="Average total spend", title="Converters spend more than non-converters in all six campaigns"); ax.legend()
     fig.tight_layout(); fig.savefig(OUT/"spend_by_campaign.png", dpi=180); plt.close(fig)
     fig, ax = plt.subplots(figsize=(7,4.5)); labels=["Contact everyone", "Target high-performing"]
     ax.bar(labels, [profit_all, profit_target], color=["#8793a1", "#168a72"])
-    ax.axhline(0, color="black", linewidth=.8); ax.set(ylabel="Estimated campaign profit", title=f"Targeting {target_count:,} customers changes expected profit")
+    ax.axhline(0, color="black", linewidth=.8); ax.set(ylabel="Estimated campaign profit", title=f"Targeting {target_count:,} customers reverses the campaign 6 loss")
     fig.tight_layout(); fig.savefig(OUT/"profit_scenarios.png", dpi=180); plt.close(fig)
 
 
@@ -181,7 +187,7 @@ def main():
         raise FileNotFoundError(f"Place the supplied raw CSV here: {CSV}")
     raw = pd.read_csv(CSV)
     df, log = clean_data(raw)
-    log.to_csv(OUT/"cleaning_log.csv", index=False)
+    log.to_csv(ROOT/"cleaning_log.csv", index=False)
     df.to_csv(OUT/"cleaned_customers.csv", index=False)
     camp = campaign_summary(df)
     tables = segment_tables(df)
@@ -191,21 +197,21 @@ def main():
     campaign_sql, segment_sql, sql_profit = sql_checks(df, tables, camp)
     campaign_sql.to_csv(OUT/"sql_campaign_results.csv", index=False)
     segment_sql.to_csv(OUT/"sql_segment_results.csv", index=False)
+    # Use the specified two-variable segmentation as the targeting rule. Mixing
+    # every one-variable view into a union would make the target nearly everyone.
+    combo_table = tables["IncomeQuartile × Children"]
+    selected_combo = combo_table.loc[combo_table["High-performing"]]
     target_ids = set()
-    for dim, table in tables.items():
-        selected = table.loc[table["High-performing"]]
-        for r in selected.itertuples():
-            if dim == "IncomeQuartile × Children":
-                mask = df.IncomeQuartile.eq(r.IncomeQuartile) & df.Children.eq(r.Children)
-            else:
-                mask = df[dim].eq(getattr(r, dim.replace(" ", "_")))
-            target_ids.update(df.loc[mask].index.tolist())
+    expected_target_conversions = 0.0
+    for r in selected_combo.itertuples():
+        mask = df.IncomeQuartile.eq(r.IncomeQuartile) & df.Children.eq(r.Children)
+        target_ids.update(df.loc[mask].index.tolist())
+        # Carry each qualifying segment's observed campaign-6 rate forward.
+        expected_target_conversions += int(r.Customers) * float(r.Rate)
     target = df.loc[sorted(target_ids)] if target_ids else df.iloc[0:0]
-    # Overlapping qualifying segment definitions are deduplicated at customer level.
-    expected_target_conversions = df.Response.mean()*len(target)
     profit_target = expected_target_conversions*11-len(target)*3
     profit_all = int(sql_profit)
-    scenarios = pd.DataFrame([{"Scenario":"Contact everyone","Customers contacted":len(df),"Expected conversions":int(df.Response.sum()),"Profit":profit_all}, {"Scenario":"Target union of qualifying segments","Customers contacted":len(target),"Expected conversions":expected_target_conversions,"Profit":profit_target}])
+    scenarios = pd.DataFrame([{"Scenario":"Contact everyone","Customers contacted":len(df),"Expected conversions":int(df.Response.sum()),"Profit":profit_all}, {"Scenario":"Target qualifying income-by-children groups","Customers contacted":len(target),"Expected conversions":expected_target_conversions,"Profit":profit_target}])
     scenarios.to_csv(OUT/"profit_scenarios.csv", index=False)
     make_charts(df, camp, tables, len(target), profit_all, profit_target)
     multi = int((df[CAMPAIGNS].sum(axis=1)>1).sum())
@@ -220,28 +226,38 @@ def main():
     from reportlab.lib.styles import getSampleStyleSheet
     from reportlab.lib.units import inch
     from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image, PageBreak
-    report = SimpleDocTemplate(str(OUT/"marketing_campaign_report.pdf"), pagesize=letter, rightMargin=0.6*inch, leftMargin=0.6*inch, topMargin=0.55*inch, bottomMargin=0.55*inch)
+    report = SimpleDocTemplate(str(ROOT/"marketing_campaign_report.pdf"), pagesize=letter, rightMargin=0.6*inch, leftMargin=0.6*inch, topMargin=0.55*inch, bottomMargin=0.55*inch)
     styles = getSampleStyleSheet(); story=[]
     best = camp.sort_values("Rate", ascending=False).iloc[0]
     high = pd.concat([t.loc[t["High-performing"]].assign(Type=n) for n,t in tables.items()], ignore_index=True)
-    high_text = "; ".join(f"{r.Type}: {r.iloc[0]} ({int(r.Customers)} customers, {r.Rate:.1%}, p={r['p-value vs rest']:.3g})" for _,r in high.iterrows()) or "No segment met both the sample-size and significance rules."
+    def readable_segment(row):
+        if row.Type == "IncomeQuartile × Children":
+            return f"{row['IncomeQuartile']} income and {row['Children']} children"
+        value = row.get(row.Type, "")
+        label = {"AgeBand":"age", "IncomeQuartile":"income", "Education":"education", "Marital_Status":"marital status", "Children":"children at home", "TenureBand":"tenure"}.get(row.Type, row.Type)
+        return f"{value} ({label})"
+    high_text = "; ".join(f"{readable_segment(r)} ({int(r.Customers)} customers, {r.Rate:.1%}, p={r['p-value vs rest']:.3g})" for _,r in high.iterrows()) or "No segment met both the sample-size and significance rules."
     story += [Paragraph("Marketing campaign analysis", styles["Title"]), Paragraph("Decision brief for the marketing manager", styles["Normal"]), Spacer(1,10), Paragraph("Summary and recommendations", styles["Heading1"])]
-    story.append(Paragraph(f"1. Prioritize learning from Campaign {int(best.Campaign)}, the highest observed response rate at {best.Rate:.1%} (95% CI {best['CI low']:.1%}–{best['CI high']:.1%}; n={int(best.Customers):,}). Confirm the offer and audience before scaling.", styles["BodyText"]))
-    story.append(Paragraph(f"2. Pilot only statistically qualified audience groups: {high_text}", styles["BodyText"]))
-    story.append(Paragraph(f"3. The observed campaign 6 profit was {profit_all:,.0f}; the modeled targeted scenario contacts {len(target):,} and yields expected profit {profit_target:,.0f} under the same per-customer conversion rate and case economics.", styles["BodyText"]))
+    story.append(Paragraph(f"1. Prioritize learning from Campaign {int(best.Campaign)}, the highest observed response rate at {best.Rate:.1%} (95% CI {best['CI low']:.1%}-{best['CI high']:.1%}; n={int(best.Customers):,}). Confirm the offer and audience before scaling.", styles["BodyText"]))
+    target_summary = "; ".join(f"{r.IncomeQuartile} income, {r.Children} children: {int(r.Customers)} customers, {r.Rate:.1%} conversion, p={r['p-value vs rest']:.3g}" for _,r in selected_combo.iterrows()) or "No income-by-children group met the rules."
+    story.append(Paragraph(f"2. Pilot the qualifying income-by-children groups: {target_summary}.", styles["BodyText"]))
+    story.append(Paragraph(f"3. The observed campaign 6 profit was {profit_all:,.0f}; targeting {len(target):,} customers is modeled to yield {expected_target_conversions:.0f} conversions and profit of {profit_target:,.0f}, using the response rates observed in those campaign 6 segments.", styles["BodyText"]))
     story += [Spacer(1,8), Paragraph("Campaign comparison", styles["Heading1"])]
-    data=[["Campaign","Conversions","Rate (95% CI)","Spend: converted","Spend: no conversion"]]
-    for _, r in camp.iterrows(): data.append([str(int(r.Campaign)),str(int(r.Conversions)),f"{r.Rate:.1%} ({r['CI low']:.1%}–{r['CI high']:.1%})",f"{r['Avg spend converted']:.0f}",f"{r['Avg spend not converted']:.0f}"])
-    tbl=Table(data, repeatRows=1, colWidths=[.75*inch,.85*inch,1.35*inch,1.35*inch,1.45*inch]); tbl.setStyle(TableStyle([("BACKGROUND",(0,0),(-1,0),colors.HexColor("#17324d")),("TEXTCOLOR",(0,0),(-1,0),colors.white),("GRID",(0,0),(-1,-1),.3,colors.grey),("FONTSIZE",(0,0),(-1,-1),7),("ROWBACKGROUNDS",(0,1),(-1,-1),[colors.white,colors.HexColor("#eef3f6")])]))
-    story += [tbl, Paragraph(f"{multi:,} customers converted in more than one campaign. Campaign intervals overlap where the data do not clearly separate observed rates; overlapping intervals are descriptive and do not substitute for a formal pairwise test.", styles["BodyText"]), Spacer(1,8), Image(str(OUT/"campaign_rates.png"), width=6.9*inch, height=3.85*inch), PageBreak(), Paragraph("Segments and targeting", styles["Heading1"]), Paragraph("High-performing means at least 50 customers and a chi-square test against all other customers with p < 0.05 and a higher conversion rate. The targeted customer count deduplicates overlaps across qualifying segment definitions.", styles["BodyText"])]
+    data=[["Campaign","Conversions","Contacted (n)","Rate (95% CI)","Spend: converted","Spend: no conversion"]]
+    for _, r in camp.iterrows(): data.append([str(int(r.Campaign)),str(int(r.Conversions)),f"{int(r.Customers):,}",f"{r.Rate:.1%} ({r['CI low']:.1%}-{r['CI high']:.1%})",f"{r['Avg spend converted']:.0f}",f"{r['Avg spend not converted']:.0f}"])
+    tbl=Table(data, repeatRows=1, colWidths=[.6*inch,.8*inch,.8*inch,1.3*inch,1.25*inch,1.25*inch]); tbl.setStyle(TableStyle([("BACKGROUND",(0,0),(-1,0),colors.HexColor("#17324d")),("TEXTCOLOR",(0,0),(-1,0),colors.white),("GRID",(0,0),(-1,-1),.3,colors.grey),("FONTSIZE",(0,0),(-1,-1),7),("ROWBACKGROUNDS",(0,1),(-1,-1),[colors.white,colors.HexColor("#eef3f6")])]))
+    story += [tbl, Paragraph(f"{multi:,} customers converted in more than one campaign. Ranking by observed rate: campaign 6, 4, 3 and 5 (tied), 1, then 2. Campaign 6's interval is above every other campaign's interval, and campaign 2's interval is below every other campaign's. Campaigns 1, 3, 4 and 5 have overlapping intervals, so their ordering is not clearly separated by these intervals; overlap is descriptive, not a formal pairwise test.", styles["BodyText"]), Spacer(1,8), Image(str(OUT/"campaign_rates.png"), width=6.9*inch, height=3.85*inch), PageBreak(), Paragraph("Segments and targeting", styles["Heading1"]), Paragraph("High-performing means at least 50 customers and a chi-square test against all other customers with p < 0.05 and a higher conversion rate. Targeting uses only qualifying groups in the income-quartile-by-children segmentation, whose categories do not overlap.", styles["BodyText"])]
     seg_data=[["Segment","Group","N","Rate (95% CI)","Avg spend","p vs rest","Qualified"]]
     for name, table in tables.items():
-        for _,r in table.iterrows(): seg_data.append([name,str(r.get("Segment",r.get(name,""))),str(int(r.Customers)),f"{r.Rate:.1%} ({r['CI low']:.1%}–{r['CI high']:.1%})",f"{r.AvgSpend:.0f}",f"{r['p-value vs rest']:.3g}","Yes" if r["High-performing"] else "No"])
-    st=Table(seg_data, repeatRows=1, colWidths=[1.25*inch,1.55*inch,.42*inch,.55*inch,.7*inch,.65*inch,.55*inch]); st.setStyle(TableStyle([("BACKGROUND",(0,0),(-1,0),colors.HexColor("#17324d")),("TEXTCOLOR",(0,0),(-1,0),colors.white),("GRID",(0,0),(-1,-1),.25,colors.grey),("FONTSIZE",(0,0),(-1,-1),6),("ROWBACKGROUNDS",(0,1),(-1,-1),[colors.white,colors.HexColor("#eef3f6")])]))
-    story += [st, Spacer(1,6), Image(str(OUT/"segment_rates.png"), width=6.9*inch, height=3.7*inch), PageBreak(), Paragraph("Targeting scenario", styles["Heading1"])]
+        display_name={"AgeBand":"Age band", "IncomeQuartile":"Income quartile", "Education":"Education", "Marital_Status":"Marital status", "Children":"Children", "TenureBand":"Tenure", "IncomeQuartile × Children":"Income by children"}.get(name,name)
+        for _,r in table.iterrows():
+            group = str(r.get("Segment",r.get(name,""))).replace(" × "," x ")
+            seg_data.append([display_name,group,str(int(r.Customers)),f"{r.Rate:.1%} ({r['CI low']:.1%}-{r['CI high']:.1%})",f"{r.AvgSpend:.0f}",f"{r['p-value vs rest']:.3g}","Yes" if r["High-performing"] else "No"])
+    st=Table(seg_data, repeatRows=1, colWidths=[1.15*inch,1.7*inch,.45*inch,1.2*inch,.75*inch,.85*inch,.6*inch]); st.setStyle(TableStyle([("BACKGROUND",(0,0),(-1,0),colors.HexColor("#17324d")),("TEXTCOLOR",(0,0),(-1,0),colors.white),("GRID",(0,0),(-1,-1),.25,colors.grey),("FONTSIZE",(0,0),(-1,-1),5.5),("VALIGN",(0,0),(-1,-1),"MIDDLE"),("LEFTPADDING",(0,0),(-1,-1),3),("RIGHTPADDING",(0,0),(-1,-1),3),("TOPPADDING",(0,0),(-1,-1),3),("BOTTOMPADDING",(0,0),(-1,-1),3),("ROWBACKGROUNDS",(0,1),(-1,-1),[colors.white,colors.HexColor("#eef3f6")])]))
+    story += [st, Spacer(1,6), Image(str(OUT/"segment_rates.png"), width=6.9*inch, height=3.7*inch), Spacer(1,6), Image(str(OUT/"spend_by_campaign.png"), width=6.9*inch, height=3.25*inch), PageBreak(), Paragraph("Targeting scenario", styles["Heading1"])]
     pdata=[["Scenario","Contacted","Expected conversions","Profit"]]+[[r.Scenario,f"{int(r['Customers contacted']):,}",f"{r['Expected conversions']:.1f}",f"{r.Profit:,.0f}"] for _,r in scenarios.iterrows()]
     pt=Table(pdata, colWidths=[2.7*inch,1.2*inch,1.4*inch,1.3*inch]); pt.setStyle(TableStyle([("BACKGROUND",(0,0),(-1,0),colors.HexColor("#17324d")),("TEXTCOLOR",(0,0),(-1,0),colors.white),("GRID",(0,0),(-1,-1),.3,colors.grey),("FONTSIZE",(0,0),(-1,-1),9)]))
-    story += [pt, Spacer(1,8), Paragraph("Profit uses the supplied case assumptions: 11 per conversion and 3 per contacted customer. The targeted scenario assumes every selected customer converts at the overall campaign 6 rate; it is a scenario, not a causal estimate.", styles["BodyText"]), Spacer(1,6), Image(str(OUT/"profit_scenarios.png"), width=6.4*inch, height=4.1*inch), Paragraph("Limitations", styles["Heading1"]), Paragraph("The data are observational and contain one historical response outcome. They cannot establish that targeting causes higher response, predict results under a changed offer, or capture campaign-specific contact costs beyond the supplied fixed values. Segment comparisons examine many groups, so some apparent differences may occur by chance. Historical spend is not profit.", styles["BodyText"])]
+    story += [pt, Spacer(1,8), Paragraph("Profit uses the supplied case assumptions: 11 per conversion and 3 per contacted customer. The targeted scenario applies each qualifying income-by-children segment's observed campaign 6 response rate to that segment. These two groups do not overlap.", styles["BodyText"]), Spacer(1,6), Image(str(OUT/"profit_scenarios.png"), width=6.4*inch, height=4.1*inch), Paragraph("Limitations", styles["Heading1"]), Paragraph("The data are observational and contain one historical response outcome. They cannot establish that targeting causes higher response, predict results under a changed offer, or capture campaign-specific contact costs beyond the supplied fixed values. Segment comparisons examine many groups, so some apparent differences may occur by chance. Historical spend is not profit.", styles["BodyText"])]
     report.build(story)
 
 
